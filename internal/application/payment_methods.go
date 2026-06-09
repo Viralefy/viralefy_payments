@@ -184,34 +184,75 @@ func gatewayEligible(g domain.PaymentGateway, displayCurrency, settlementCurrenc
 	return false
 }
 
-// buildMethodOptions expande um gateway em uma ou mais PaymentMethodOption.
-// multi-currency emite UM card por accepted_currency; single-currency emite
-// UM card por gateway.
+// buildMethodOptions emite SEMPRE UM card por gateway. Multi-currency
+// providers (Stripe/Heleket) já não expandem em N cards — escolhemos a
+// moeda primária do gateway e mostramos a conversão pra moeda display via
+// `conversion_note`. Decisão de produto: cliente quer UMA opção visível por
+// método, sem a poluição de "Stripe pay in USD / pay in BRL / pay in EUR…"
+// que a versão anterior gerava.
+//
+// Regra de escolha da moeda primária:
+//   - Stripe (fiat multi): se display ∈ accepted → cobra na display (sem
+//     conversion_note); senão USD se aceita; senão primeira aceita.
+//   - Heleket (crypto multi): prefere USDT (estável + universal); senão
+//     primeira aceita.
+//   - Single-currency: usa a única moeda aceita do gateway.
 func (s *MethodsService) buildMethodOptions(ctx context.Context, g domain.PaymentGateway, plan *domain.Plan, q quote) []PaymentMethodOption {
 	if len(g.AcceptedCurrencies) == 0 {
 		return nil
 	}
-	provider := strings.ToLower(strings.TrimSpace(g.Provider))
-	if multiCurrencyProviders[provider] {
-		out := make([]PaymentMethodOption, 0, len(g.AcceptedCurrencies))
-		seen := map[string]bool{}
-		for _, raw := range g.AcceptedCurrencies {
-			code := strings.ToUpper(strings.TrimSpace(raw))
-			if code == "" || seen[code] {
-				continue
-			}
-			seen[code] = true
-			if opt, ok := s.buildSingleOption(ctx, g, plan, q, code); ok {
-				out = append(out, opt)
-			}
-		}
-		return out
+	code := pickPrimaryCurrency(g, q.DisplayCurrency)
+	if code == "" {
+		return nil
 	}
-	code := pickChargedCurrency(g.AcceptedCurrencies, q.SettlementCurrency)
 	if opt, ok := s.buildSingleOption(ctx, g, plan, q, code); ok {
 		return []PaymentMethodOption{opt}
 	}
 	return nil
+}
+
+// pickPrimaryCurrency centraliza a heurística de "qual moeda do gateway o
+// cliente vê". Igualdade case-insensitive em accepted_currencies — admins
+// cadastram em qualquer caixa.
+func pickPrimaryCurrency(g domain.PaymentGateway, displayCurrency string) string {
+	display := strings.ToUpper(strings.TrimSpace(displayCurrency))
+	provider := strings.ToLower(strings.TrimSpace(g.Provider))
+	accepted := make([]string, 0, len(g.AcceptedCurrencies))
+	for _, raw := range g.AcceptedCurrencies {
+		code := strings.ToUpper(strings.TrimSpace(raw))
+		if code != "" {
+			accepted = append(accepted, code)
+		}
+	}
+	if len(accepted) == 0 {
+		return ""
+	}
+	contains := func(code string) bool {
+		for _, c := range accepted {
+			if c == code {
+				return true
+			}
+		}
+		return false
+	}
+	if !multiCurrencyProviders[provider] {
+		return accepted[0]
+	}
+	// Heleket (crypto) → USDT primeiro (única stable do pool, evita
+	// volatilidade de fechamento na ponta do cliente).
+	if cryptoProviders[provider] && contains("USDT") {
+		return "USDT"
+	}
+	// Stripe (fiat) → prefere a moeda do display se aceita.
+	if display != "" && contains(display) {
+		return display
+	}
+	// Fallback genérico: USD se aceito (cobre Stripe sem display match), senão
+	// a primeira moeda do array.
+	if contains("USD") {
+		return "USD"
+	}
+	return accepted[0]
 }
 
 // buildSingleOption emite UM PaymentMethodOption pra (gateway, chargedCurrency).
@@ -239,10 +280,10 @@ func (s *MethodsService) buildSingleOption(ctx context.Context, g domain.Payment
 			settleSymbol = q.SettlementSymbol
 		}
 	}
+	// Agora que cada gateway emite UM card, não há ambiguidade entre opções
+	// do mesmo provider — `name` é o label puro do gateway. A moeda cobrada
+	// aparece em charged_amount/charged_currency + conversion_note.
 	name := g.Name
-	if multiCurrencyProviders[strings.ToLower(strings.TrimSpace(g.Provider))] {
-		name = g.Name + " — pay in " + chargedCurrency
-	}
 	opt := PaymentMethodOption{
 		GatewayID:          g.ID,
 		Provider:           g.Provider,
