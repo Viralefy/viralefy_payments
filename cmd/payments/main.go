@@ -12,7 +12,9 @@ import (
 
 	"github.com/getsentry/sentry-go"
 
+	"github.com/Viralefy/viralefy_payments/internal/application"
 	"github.com/Viralefy/viralefy_payments/internal/config"
+	"github.com/Viralefy/viralefy_payments/internal/infrastructure/external/payment"
 	"github.com/Viralefy/viralefy_payments/internal/infrastructure/persistence/postgres"
 	httpiface "github.com/Viralefy/viralefy_payments/internal/interface/http"
 )
@@ -23,7 +25,6 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// slog JSON — mesmo padrão do viralefy_api pra alimentar Alloy → Loki.
 	version := os.Getenv("APP_VERSION")
 	if version == "" {
 		version = "dev"
@@ -37,7 +38,6 @@ func main() {
 	)
 	slog.SetDefault(logger)
 
-	// Sentry — no-op quando SENTRY_DSN vazio (HML/dev).
 	if cfg.SentryDSN != "" {
 		if err := sentry.Init(sentry.ClientOptions{
 			Dsn:         cfg.SentryDSN,
@@ -59,10 +59,43 @@ func main() {
 		log.Fatal("database:", err)
 	}
 	defer db.Close()
-	// pool reservado pros repos da Wave 2 (gateway_repo, payment_attempts...).
-	_ = db.Pool()
 
-	router := httpiface.NewRouter(cfg.InternalSharedSecret)
+	// Migrations idempotentes — não bloqueamos boot se accepted_currencies
+	// já existe (caso o monólito tenha rodado a 032 antes da extração).
+	if err := db.ApplyMigrations(ctx); err != nil {
+		logger.Warn("migration apply warning", "error", err.Error())
+	}
+
+	// Providers — registrados na ordem que o registry expõe. siteURL injetado
+	// só no Stripe (success_url default). Manuais não precisam de config.
+	registry := application.NewPaymentRegistry(
+		payment.NewStripe(cfg.SiteURL),
+		payment.NewHeleket(),
+		payment.NewWoovi(),
+		payment.NewManualPIX(),
+		payment.NewManualUSDT(),
+		payment.NewManualCrypto(),
+	)
+
+	gwRepo := postgres.NewGatewayRepo(db)
+	gatewayService := application.NewGatewayService(gwRepo)
+	currencyReader := application.NewCurrencyReader(db.Pool())
+	planReader := application.NewPlanReader(db.Pool())
+	methodsService := application.NewMethodsService(planReader, currencyReader, gatewayService)
+	stripeEvents := postgres.NewStripeEventsRepo(db)
+
+	deps := &httpiface.Deps{
+		Registry:               registry,
+		Gateways:               gatewayService,
+		Methods:                methodsService,
+		Plans:                  planReader,
+		Currencies:             currencyReader,
+		StripeEvents:           stripeEvents,
+		InternalSharedSecret:   cfg.InternalSharedSecret,
+		APIInternalCallbackURL: cfg.APIInternalCallbackURL,
+	}
+
+	router := httpiface.NewRouter(deps)
 	addr := cfg.BindHost + ":" + cfg.Port
 	srv := &http.Server{
 		Addr:              addr,

@@ -10,11 +10,16 @@ import (
 )
 
 // NewRouter monta o chi.Router com middlewares padrão do projeto:
-// RequestID, RealIP, OTel HTTP, Recoverer. Os endpoints /internal/*
-// (exceto health e webhooks públicos) ficam atrás de InternalAuth.
+// RequestID, RealIP, OTel HTTP, Recoverer.
 //
-// Wave 1: só /internal/health está exposto. Resto vem na Wave 2.
-func NewRouter(internalSecret string) http.Handler {
+// Routing scheme:
+//   /internal/health                — público (probe)
+//   /internal/v1/webhooks/{p}       — público (signature por provider)
+//   /internal/v1/...                — protegido por InternalAuth
+//
+// Wave 2 expandiu o scaffold da Wave 1 com os endpoints de charge, methods,
+// gateways CRUD e webhooks dos 3 providers automáticos.
+func NewRouter(d *Deps) http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
@@ -27,22 +32,27 @@ func NewRouter(internalSecret string) http.Handler {
 	})
 	r.Use(middleware.Recoverer)
 
-	// Health fica fora do auth — probe do systemd / orchestrator precisa.
 	r.Get("/internal/health", health)
 
-	// Demais rotas internas serão registradas aqui (Wave 2), todas atrás
-	// do middleware InternalAuth. Ex.:
-	//
-	//   r.Group(func(r chi.Router) {
-	//       r.Use(InternalAuth(internalSecret))
-	//       r.Get("/internal/methods", h.ListMethods)
-	//       r.Post("/internal/charge", h.CreateCharge)
-	//       ...
-	//   })
-	//
-	// Webhooks externos (Stripe, Heleket, Woovi) ficam fora do InternalAuth
-	// pois entram via reverse-proxy do Caddy e validam por assinatura.
-	_ = internalSecret
+	// Webhooks externos — PÚBLICOS. Stripe/Heleket/Woovi não conhecem o
+	// INTERNAL_SHARED_SECRET, então signature check é a única defesa.
+	r.Post("/internal/v1/webhooks/stripe", d.stripeWebhookHandler)
+	r.Post("/internal/v1/webhooks/heleket", d.heleketWebhookHandler)
+	r.Post("/internal/v1/webhooks/woovi", d.wooviWebhookHandler)
+
+	// Rotas internas — protegidas por X-Internal-Token.
+	r.Group(func(r chi.Router) {
+		r.Use(InternalAuth(d.InternalSharedSecret))
+
+		r.Get("/internal/v1/methods", d.methodsHandler)
+		r.Post("/internal/v1/charge", d.chargeHandler)
+
+		r.Get("/internal/v1/gateways", d.listGatewaysHandler)
+		r.Post("/internal/v1/gateways", d.createGatewayHandler)
+		r.Get("/internal/v1/gateways/{id}", d.getGatewayHandler)
+		r.Put("/internal/v1/gateways/{id}", d.updateGatewayHandler)
+		r.Delete("/internal/v1/gateways/{id}", d.deleteGatewayHandler)
+	})
 
 	return r
 }

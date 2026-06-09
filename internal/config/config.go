@@ -14,20 +14,25 @@ type Config struct {
 	BindHost             string // BIND_HOST (default 127.0.0.1)
 	DatabaseURL          string // DATABASE_URL — obrigatório
 	InternalSharedSecret string // INTERNAL_SHARED_SECRET — header X-Internal-Token
-	APICallbackURL       string // API_CALLBACK_URL — usado pra POST /internal/payment-confirmed
-	SiteURL              string // SITE_URL — URL pública da loja, base de return URLs
-	SentryDSN            string // SENTRY_DSN — vazio = Sentry no-op
+	APICallbackURL       string // API_CALLBACK_URL — back-compat (preferir API_INTERNAL_CALLBACK_URL)
+	// APIInternalCallbackURL — base URL do monólito (viralefy_api) usado pelo
+	// webhook handler depois de validar signature: POST {url}/internal/v1/payment-confirmed
+	// com X-Internal-Token. Wave 2 introduziu — preferir esse sobre APICallbackURL.
+	APIInternalCallbackURL string
+	SiteURL                string // SITE_URL — URL pública da loja, base de return URLs
+	SentryDSN              string // SENTRY_DSN — vazio = Sentry no-op
 }
 
 func Load() (Config, error) {
 	cfg := Config{
-		Port:                 getenv("PAYMENTS_PORT", "8081"),
-		BindHost:             getenv("BIND_HOST", "127.0.0.1"),
-		DatabaseURL:          getenv("DATABASE_URL", ""),
-		InternalSharedSecret: getenv("INTERNAL_SHARED_SECRET", ""),
-		APICallbackURL:       getenv("API_CALLBACK_URL", ""),
-		SiteURL:              getenv("SITE_URL", getenv("NEXT_PUBLIC_SITE_URL", "https://viralefy.com")),
-		SentryDSN:            getenv("SENTRY_DSN", ""),
+		Port:                   getenv("PAYMENTS_PORT", "8081"),
+		BindHost:               getenv("BIND_HOST", "127.0.0.1"),
+		DatabaseURL:            getenv("DATABASE_URL", ""),
+		InternalSharedSecret:   getenv("INTERNAL_SHARED_SECRET", ""),
+		APICallbackURL:         getenv("API_CALLBACK_URL", ""),
+		APIInternalCallbackURL: getenv("API_INTERNAL_CALLBACK_URL", getenv("API_CALLBACK_URL", "")),
+		SiteURL:                getenv("SITE_URL", getenv("NEXT_PUBLIC_SITE_URL", "https://viralefy.com")),
+		SentryDSN:              getenv("SENTRY_DSN", ""),
 	}
 	if strings.TrimSpace(cfg.DatabaseURL) == "" {
 		return cfg, fmt.Errorf("DATABASE_URL is required")
