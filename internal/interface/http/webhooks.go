@@ -140,6 +140,39 @@ func (d *Deps) wooviWebhookHandler(w nethttp.ResponseWriter, r *nethttp.Request)
 	writeJSON(w, nethttp.StatusOK, map[string]string{"status": "ok"})
 }
 
+// abacatePayWebhookHandler valida X-Webhook-Signature + dispara callback.
+// AbacatePay assina HMAC-SHA256(body) → base64. Headers + algorítmo idênticos
+// ao Stripe na ideia, formato diferente — base64 em vez de hex.
+func (d *Deps) abacatePayWebhookHandler(w nethttp.ResponseWriter, r *nethttp.Request) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, webhookBodyLimit))
+	if err != nil {
+		w.WriteHeader(nethttp.StatusBadRequest)
+		return
+	}
+	gw, err := d.Gateways.GetActiveByProvider(r.Context(), "abacatepay")
+	if err != nil || gw == nil {
+		w.WriteHeader(nethttp.StatusBadRequest)
+		return
+	}
+	secret := strings.TrimSpace(gw.Config["webhook_secret"])
+	if err := payment.VerifyAbacatePayWebhook(body, r.Header.Get("X-Webhook-Signature"), secret); err != nil {
+		slog.Default().Warn("abacatepay webhook signature failed", "err", err.Error())
+		w.WriteHeader(nethttp.StatusBadRequest)
+		return
+	}
+	ev, err := payment.ParseAbacatePayEvent(body)
+	if err != nil {
+		w.WriteHeader(nethttp.StatusBadRequest)
+		return
+	}
+	if !ev.IsPaid() {
+		writeJSON(w, nethttp.StatusOK, map[string]string{"status": "ignored"})
+		return
+	}
+	d.postCallback(r.Context(), "abacatepay", ev.OrderID(), ev.ExternalRef())
+	writeJSON(w, nethttp.StatusOK, map[string]string{"status": "ok"})
+}
+
 // postCallback dispara POST {API_INTERNAL_CALLBACK_URL}/internal/v1/payment-confirmed
 // com X-Internal-Token. Timeout curto (5s) — webhook response ao provider
 // não pode esperar demais (Stripe corta em 10s). Falha aqui é loggada mas

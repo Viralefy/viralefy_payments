@@ -72,6 +72,7 @@ func main() {
 		payment.NewStripe(cfg.SiteURL),
 		payment.NewHeleket(),
 		payment.NewWoovi(),
+		payment.NewAbacatePay(),
 		payment.NewManualPIX(),
 		payment.NewManualUSDT(),
 		payment.NewManualCrypto(),

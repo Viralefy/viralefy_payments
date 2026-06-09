@@ -39,6 +39,7 @@ func NewRouter(d *Deps) http.Handler {
 	r.Post("/internal/v1/webhooks/stripe", d.stripeWebhookHandler)
 	r.Post("/internal/v1/webhooks/heleket", d.heleketWebhookHandler)
 	r.Post("/internal/v1/webhooks/woovi", d.wooviWebhookHandler)
+	r.Post("/internal/v1/webhooks/abacatepay", d.abacatePayWebhookHandler)
 
 	// Rotas internas — protegidas por X-Internal-Token.
 	r.Group(func(r chi.Router) {

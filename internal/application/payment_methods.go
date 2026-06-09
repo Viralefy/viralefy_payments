@@ -151,6 +151,7 @@ var cryptoProviders = map[string]bool{
 var brOnlyProviders = map[string]bool{
 	"manual_pix": true,
 	"woovi":      true,
+	"abacatepay": true, // PIX é rail BR-only, processor não muda isso
 }
 
 // gatewayEligible decide se um gateway deve aparecer pro cliente. Regras
@@ -308,7 +309,7 @@ func pickChargedCurrency(accepted []string, settlement string) string {
 // kindOf mapeia provider → kind genérico (UI usa pra ícone/etiqueta).
 func kindOf(provider string) string {
 	switch provider {
-	case "woovi", "manual_pix":
+	case "woovi", "manual_pix", "abacatepay":
 		return "pix"
 	case "stripe":
 		return "card"
