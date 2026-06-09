@@ -2,14 +2,32 @@
 --
 -- Origem: junta as migrations 032 (accepted_currencies) e 035 (stripe_events)
 -- do viralefy_api. Como o microsserviço compartilha o Postgres do monólito
--- (Phase 8 §1.3 "sem DB próprio inicial"), aqui só ALTERAMOS as tabelas que
--- já existem (idempotente via IF NOT EXISTS) e criamos as novas que são
--- escopo exclusivo do payments service.
+-- (Phase 8 §1.3 "sem DB próprio inicial"), esta migration é 100% idempotente:
 --
--- payment_gateways em si continua sendo criada por 001_init do monólito;
--- migrations 032 (proof) e 034 (proof storage) NÃO vêm pra cá — proof
--- segue no monólito porque é parte do ciclo de vida da Order.
+--   * Em prod (DB compartilhado com monólito) → as tabelas/colunas já existem,
+--     todos os DDL viram no-op via IF NOT EXISTS.
+--   * Em standalone install (DB dedicado ao payments) → cria as tabelas do
+--     zero. Mantém compatibilidade com o futuro split de DBs.
+--
+-- IMPORTANTE: NUNCA tocar o monólito a partir daqui. As tabelas continuam de
+-- propriedade conceitual do `viralefy_api`; este script apenas garante que o
+-- payments suba sem panic em ambos os cenários.
+--
+-- proof (032 monólito) NÃO entra aqui — é ciclo de vida da Order, fica no
+-- monólito.
 BEGIN;
+
+-- ─── payment_gateways (standalone-only; em prod já existe) ─────────────────
+-- Mesmo shape que monólito 001_init.up.sql.
+CREATE TABLE IF NOT EXISTS payment_gateways (
+    id         TEXT PRIMARY KEY,
+    name       TEXT NOT NULL,
+    provider   TEXT NOT NULL,
+    active     BOOLEAN NOT NULL DEFAULT false,
+    config     JSONB NOT NULL DEFAULT '{}',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 
 -- ─── accepted_currencies (origem: monólito 032) ────────────────────────────
 -- Cada gateway aceita um subconjunto das moedas globais. GIN porque a busca
@@ -27,13 +45,13 @@ CREATE INDEX IF NOT EXISTS idx_gateways_active_ccy
 -- com backoff). Sem TTL aqui — Stripe re-entrega por até ~3 dias; limpamos
 -- via cron de retenção genérico (>90d).
 CREATE TABLE IF NOT EXISTS stripe_events_processed (
-  event_id    TEXT PRIMARY KEY,
-  event_type  TEXT NOT NULL,
-  order_id    TEXT,
-  received_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    event_id    TEXT PRIMARY KEY,
+    event_type  TEXT NOT NULL,
+    order_id    TEXT,
+    received_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_stripe_events_received
-  ON stripe_events_processed(received_at DESC);
+    ON stripe_events_processed(received_at DESC);
 
 COMMIT;
