@@ -15,6 +15,7 @@ import (
 	"github.com/Viralefy/viralefy_payments/internal/application"
 	"github.com/Viralefy/viralefy_payments/internal/config"
 	"github.com/Viralefy/viralefy_payments/internal/infrastructure/external/payment"
+	"github.com/Viralefy/viralefy_payments/internal/infrastructure/observability"
 	"github.com/Viralefy/viralefy_payments/internal/infrastructure/persistence/postgres"
 	httpiface "github.com/Viralefy/viralefy_payments/internal/interface/http"
 )
@@ -51,6 +52,10 @@ func main() {
 	} else {
 		logger.Info("sentry disabled (SENTRY_DSN empty)")
 	}
+
+	// Prometheus collectors — registrados antes de servir requests pra
+	// /internal/metrics não 404ar enquanto handlers ainda warming up.
+	observability.InitMetrics()
 
 	ctx := context.Background()
 	db, err := postgres.New(ctx, cfg.DatabaseURL)

@@ -7,6 +7,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+
+	"github.com/Viralefy/viralefy_payments/internal/infrastructure/observability"
 )
 
 // NewRouter monta o chi.Router com middlewares padrão do projeto:
@@ -30,9 +32,15 @@ func NewRouter(d *Deps) http.Handler {
 			}),
 		)
 	})
+	r.Use(observability.HTTPMiddleware)
 	r.Use(middleware.Recoverer)
 
 	r.Get("/internal/health", health)
+
+	// /internal/metrics: Prometheus scrape (loopback-only via bind 127.0.0.1:8081).
+	// Sem InternalAuth pra simplificar a config do Prometheus — o bind já
+	// restringe o acesso à interface privada.
+	r.Method(http.MethodGet, "/internal/metrics", observability.MetricsHandler())
 
 	// Webhooks externos — PÚBLICOS. Stripe/Heleket/Woovi não conhecem o
 	// INTERNAL_SHARED_SECRET, então signature check é a única defesa.
