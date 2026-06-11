@@ -15,7 +15,8 @@ import (
 // RequestID, RealIP, OTel HTTP, Recoverer.
 //
 // Routing scheme:
-//   /internal/health                — público (probe)
+//   /internal/health                — público (probe, legacy)
+//   /health                         — público (probe, alias unificado — PHASE-10)
 //   /internal/v1/webhooks/{p}       — público (signature por provider)
 //   /internal/v1/...                — protegido por InternalAuth
 //
@@ -36,6 +37,11 @@ func NewRouter(d *Deps) http.Handler {
 	r.Use(middleware.Recoverer)
 
 	r.Get("/internal/health", health)
+	// /health: alias unificado (PHASE-10 — 2026-06-11). Reusa o mesmo handler
+	// pra que viralefy-smoke + probes externos convirjam num único path em
+	// todos os services. /internal/health continua respondendo por backward
+	// compat (systemd probes, dashboards antigos).
+	r.Get("/health", health)
 
 	// /internal/metrics: Prometheus scrape (loopback-only via bind 127.0.0.1:8081).
 	// Sem InternalAuth pra simplificar a config do Prometheus — o bind já
